@@ -1,0 +1,457 @@
+--[[
+    VALENTINE DOORS HUB v2.0 — MOBILE PREMIUM (FIXED v3)
+    Исправлено: авто-взаимодействие, тройной детектор монстров, оптимизация
+    Автор: Assistant
+]]
+
+repeat task.wait() until game:IsLoaded()
+
+-- ============================================================================
+-- СЕРВИСЫ
+-- ============================================================================
+local p = game.Players.LocalPlayer
+local ts = game:GetService("TweenService")
+local rs = game:GetService("RunService")
+local uis = game:GetService("UserInputService")
+local vu = game:GetService("VirtualUser")
+local ws = game.Workspace
+local lighting = game:GetService("Lighting")
+
+-- ============================================================================
+-- НАСТРОЙКИ (ВСЕ ВЫКЛЮЧЕНЫ)
+-- ============================================================================
+_G.DoorsSettings = {
+    GodMode = false,
+    SpeedBoost = false,
+    SpeedValue = 17,
+    EntityESP = false,
+    ItemESP = false,
+    PlayerESP = false,
+    DoorESP = false,
+    FullBright = false,
+    NoFog = false,
+    AutoInteract = false,
+    AntiScreech = false,
+    AntiAFK = false
+}
+
+-- ============================================================================
+-- УТИЛИТЫ
+-- ============================================================================
+local function getChar() return p.Character end
+local function getHRP() local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHum() local c = getChar() return c and c:FindFirstChildOfClass("Humanoid") end
+
+-- ============================================================================
+-- PLAVNY WALKSPEED
+-- ============================================================================
+local speedDirection = 1
+local function smoothWalkSpeed()
+    task.spawn(function()
+        while _G.DoorsSettings.SpeedBoost do
+            local hum = getHum()
+            if hum then
+                local target = _G.DoorsSettings.SpeedValue + (4 * speedDirection)
+                ts:Create(hum, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {WalkSpeed = target}):Play()
+                speedDirection = speedDirection * -1
+            end
+            task.wait(1)
+        end
+        local hum = getHum()
+        if hum then ts:Create(hum, TweenInfo.new(0.5), {WalkSpeed = 16}):Play() end
+    end)
+end
+
+-- ============================================================================
+-- NOCLIP С ЛУЧОМ
+-- ============================================================================
+local function teleportOnRay()
+    local char = getChar()
+    if not char then return end
+    local hrp = getHRP()
+    if not hrp then return end
+    local rayResult = ws:Raycast(ws.CurrentCamera.CFrame.Position, ws.CurrentCamera.CFrame.LookVector * 500, RaycastParams.new():SetFilterDescendantsInstances({char}))
+    if rayResult then hrp.CFrame = CFrame.new(rayResult.Position + rayResult.Normal * 3) end
+end
+
+-- ============================================================================
+-- ESP СИСТЕМА (С ТРОЙНЫМ ДЕТЕКТОРОМ МОНСТРОВ)
+-- ============================================================================
+local highlights = {}
+local ESP_RADIUS = 60
+
+-- Тройной детектор монстров
+local function isMonster(obj)
+    local name = obj.Name:lower()
+    
+    -- Метод 1: По имени
+    local monsterNames = {"rush", "ambush", "figure", "seek", "screech", "halt", "eyes", "timothy", "jack"}
+    for _, mn in ipairs(monsterNames) do
+        if name:find(mn) then return true, mn end
+    end
+    
+    -- Метод 2: По звуку (если у монстра есть звуковой компонент)
+    for _, child in ipairs(obj:GetChildren()) do
+        if child:IsA("Sound") and child.IsLoaded then
+            for _, mn in ipairs(monsterNames) do
+                if child.Name:lower():find(mn) or child.SoundId:lower():find(mn) then
+                    return true, mn .. "_sound"
+                end
+            end
+        end
+    end
+    
+    -- Метод 3: По атрибутам (некоторые монстры имеют специфичные атрибуты)
+    local attrs = {"IsRush", "IsAmbush", "IsFigure", "IsSeek", "IsScreech"}
+    for _, attr in ipairs(attrs) do
+        pcall(function()
+            if obj:GetAttribute(attr) == true then
+                return true, attr:lower()
+            end
+        end)
+    end
+    
+    return false, nil
+end
+
+local function updateESP()
+    local hrp = getHRP()
+    if not hrp then return end
+    local playerPos = hrp.Position
+    
+    for obj, h in pairs(highlights) do
+        if not obj.Parent then
+            pcall(function() h:Destroy() end)
+            highlights[obj] = nil
+        end
+    end
+    
+    local function hl(obj, color)
+        if not obj or highlights[obj] then return end
+        local pos = obj:IsA("Model") and obj:GetPivot().Position or (obj:IsA("BasePart") and obj.Position or nil)
+        if not pos or (playerPos - pos).Magnitude > ESP_RADIUS then return end
+        local h = Instance.new("Highlight")
+        h.Name = "DoorsESP"
+        h.FillColor = color
+        h.FillTransparency = 0.5
+        h.OutlineColor = Color3.new(1,1,1)
+        h.Parent = obj
+        highlights[obj] = h
+    end
+    
+    if _G.DoorsSettings.EntityESP then
+        for _, v in ipairs(ws:GetDescendants()) do
+            local found, monName = isMonster(v)
+            if found then
+                -- Разные цвета для разных типов
+                local color = Color3.fromRGB(255, 0, 0) -- красный по умолчанию
+                if monName:find("rush") then color = Color3.fromRGB(255, 100, 0)
+                elseif monName:find("ambush") then color = Color3.fromRGB(255, 0, 100)
+                elseif monName:find("figure") then color = Color3.fromRGB(200, 0, 0)
+                elseif monName:find("seek") then color = Color3.fromRGB(255, 50, 50)
+                elseif monName:find("screech") then color = Color3.fromRGB(150, 0, 255)
+                end
+                hl(v, color)
+            end
+        end
+    end
+    
+    if _G.DoorsSettings.ItemESP then
+        for _, v in ipairs(ws:GetDescendants()) do
+            for _, item in ipairs({"Key","Gold","Coin","Battery","Lockpick","Vitamins","Crucifix","Candle"}) do
+                if v.Name:find(item) then hl(v, Color3.fromRGB(0,255,200)) break end
+            end
+        end
+    end
+    
+    if _G.DoorsSettings.DoorESP then
+        for _, v in ipairs(ws:GetDescendants()) do
+            if v:IsA("BasePart") and v.Name:find("Door") and not v.Name:find("DoorFrame") then
+                hl(v, Color3.fromRGB(255,255,0))
+            end
+        end
+    end
+end
+
+-- ============================================================================
+-- АВТО-ВЗАИМОДЕЙСТВИЕ (ИСПРАВЛЕНО)
+-- ============================================================================
+local excludedNames = {"Wardrobe", "Closet", "Bed", "Wardroba", "Шкаф", "Кровать"}
+local function isExcluded(obj)
+    local str = (obj.Name .. (obj.Parent and obj.Parent.Name or "")):lower()
+    for _, ex in ipairs(excludedNames) do
+        if str:find(ex:lower()) then return true end
+    end
+    return false
+end
+
+local function autoInteract()
+    local hrp = getHRP()
+    if not hrp then return end
+    local playerPos = hrp.Position
+    
+    for _, v in ipairs(ws:GetDescendants()) do
+        if v:IsA("ProximityPrompt") and v.Enabled then
+            if isExcluded(v) or isExcluded(v.Parent) then continue end
+            
+            local promptParent = v.Parent
+            local pos = nil
+            if promptParent then
+                pos = promptParent:IsA("BasePart") and promptParent.Position 
+                    or (promptParent:IsA("Model") and promptParent:GetPivot().Position)
+            end
+            
+            if pos and (playerPos - pos).Magnitude < 15 then
+                pcall(function() 
+                    fireproximityprompt(v) 
+                end)
+            end
+        end
+    end
+end
+
+-- ============================================================================
+-- МОБИЛЬНОЕ МЕНЮ (ИСПРАВЛЕНО)
+-- ============================================================================
+local function createMobileUI()
+    local ScreenGui = Instance.new("ScreenGui", game:GetService("CoreGui"))
+    ScreenGui.Name = "DoorsHub"
+    
+    local Main = Instance.new("Frame", ScreenGui)
+    Main.Size = UDim2.new(0, 300, 0, 420)
+    Main.Position = UDim2.new(0.5, -150, 0.3, 0)
+    Main.BackgroundColor3 = Color3.fromRGB(15,15,25)
+    Main.BorderSizePixel = 0
+    Main.Active = true
+    Main.Draggable = true
+    Instance.new("UICorner", Main).CornerRadius = UDim.new(0,16)
+    
+    local Title = Instance.new("Frame", Main)
+    Title.Size = UDim2.new(1,0,0,55)
+    Title.BackgroundColor3 = Color3.fromRGB(30,30,50)
+    Title.BorderSizePixel = 0
+    Instance.new("UICorner", Title).CornerRadius = UDim.new(0,16)
+    
+    local TitleFix = Instance.new("Frame", Title)
+    TitleFix.Size = UDim2.new(1,0,0.5,0)
+    TitleFix.Position = UDim2.new(0,0,0.5,0)
+    TitleFix.BackgroundColor3 = Title.BackgroundColor3
+    TitleFix.BorderSizePixel = 0
+    
+    local TitleText = Instance.new("TextLabel", Title)
+    TitleText.Size = UDim2.new(1,-50,1,-10)
+    TitleText.Position = UDim2.new(0,15,0,5)
+    TitleText.BackgroundTransparency = 1
+    TitleText.Text = "🚪 DOORS HUB"
+    TitleText.TextColor3 = Color3.new(1,1,1)
+    TitleText.TextSize = 22
+    TitleText.Font = Enum.Font.GothamBlack
+    TitleText.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local SubTitle = Instance.new("TextLabel", Title)
+    SubTitle.Size = UDim2.new(1,-50,0,18)
+    SubTitle.Position = UDim2.new(0,15,0,32)
+    SubTitle.BackgroundTransparency = 1
+    SubTitle.Text = "Premium Mobile"
+    SubTitle.TextColor3 = Color3.fromRGB(150,150,200)
+    SubTitle.TextSize = 11
+    SubTitle.Font = Enum.Font.Gotham
+    SubTitle.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local CloseBtn = Instance.new("TextButton", Title)
+    CloseBtn.Size = UDim2.new(0,30,0,30)
+    CloseBtn.Position = UDim2.new(1,-40,0.5,-15)
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(255,60,60)
+    CloseBtn.Text = "✕"
+    CloseBtn.TextColor3 = Color3.new(1,1,1)
+    CloseBtn.TextSize = 16
+    CloseBtn.Font = Enum.Font.GothamBold
+    Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0,15)
+    CloseBtn.MouseButton1Click:Connect(function() Main.Visible = false; _G.ShowButton.Visible = true end)
+    
+    local Content = Instance.new("ScrollingFrame", Main)
+    Content.Size = UDim2.new(1,-20,1,-70)
+    Content.Position = UDim2.new(0,10,0,65)
+    Content.BackgroundTransparency = 1
+    Content.BorderSizePixel = 0
+    Content.ScrollBarThickness = 3
+    Content.ScrollBarImageColor3 = Color3.fromRGB(100,100,200)
+    Content.CanvasSize = UDim2.new(0,0,0,0)
+    
+    local UIListLayout = Instance.new("UIListLayout", Content)
+    UIListLayout.Padding = UDim.new(0,8)
+    UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        Content.CanvasSize = UDim2.new(0,0,0,UIListLayout.AbsoluteContentSize.Y+10)
+    end)
+    
+    local function createSection(text, icon)
+        local s = Instance.new("Frame", Content)
+        s.Size = UDim2.new(1,0,0,35)
+        s.BackgroundColor3 = Color3.fromRGB(30,30,45)
+        s.BorderSizePixel = 0
+        Instance.new("UICorner", s).CornerRadius = UDim.new(0,10)
+        local l = Instance.new("TextLabel", s)
+        l.Size = UDim2.new(1,-10,1,0)
+        l.Position = UDim2.new(0,12,0,0)
+        l.BackgroundTransparency = 1
+        l.Text = (icon or "") .. " " .. text
+        l.TextColor3 = Color3.fromRGB(200,200,255)
+        l.Font = Enum.Font.GothamBold
+        l.TextSize = 14
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        return s
+    end
+    
+    local function createToggle(text, setting, callback)
+        local f = Instance.new("Frame", Content)
+        f.Size = UDim2.new(1,0,0,48)
+        f.BackgroundColor3 = Color3.fromRGB(25,25,40)
+        f.BorderSizePixel = 0
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0,12)
+        
+        local l = Instance.new("TextLabel", f)
+        l.Size = UDim2.new(0.6,0,1,0)
+        l.Position = UDim2.new(0,14,0,0)
+        l.BackgroundTransparency = 1
+        l.Text = text
+        l.TextColor3 = Color3.new(1,1,1)
+        l.Font = Enum.Font.GothamSemibold
+        l.TextSize = 14
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        
+        local t = Instance.new("TextButton", f)
+        t.Size = UDim2.new(0,46,0,24)
+        t.Position = UDim2.new(1,-58,0.5,-12)
+        t.BackgroundColor3 = _G.DoorsSettings[setting] and Color3.fromRGB(0,200,100) or Color3.fromRGB(255,50,60)
+        t.Text = ""
+        t.BorderSizePixel = 0
+        Instance.new("UICorner", t).CornerRadius = UDim.new(1,0)
+        
+        local k = Instance.new("Frame", t)
+        k.Size = UDim2.new(0,18,0,18)
+        k.Position = _G.DoorsSettings[setting] and UDim2.new(0,2,0.5,-9) or UDim2.new(1,-20,0.5,-9)
+        k.BackgroundColor3 = Color3.new(1,1,1)
+        k.BorderSizePixel = 0
+        Instance.new("UICorner", k).CornerRadius = UDim.new(1,0)
+        
+        t.MouseButton1Click:Connect(function()
+            _G.DoorsSettings[setting] = not _G.DoorsSettings[setting]
+            local state = _G.DoorsSettings[setting]
+            t.BackgroundColor3 = state and Color3.fromRGB(0,200,100) or Color3.fromRGB(255,50,60)
+            k:TweenPosition(state and UDim2.new(0,2,0.5,-9) or UDim2.new(1,-20,0.5,-9), "Out", "Quad", 0.2, true)
+            if callback then callback(state) end
+        end)
+    end
+    
+    local function createButton(text, icon, callback)
+        local b = Instance.new("TextButton", Content)
+        b.Size = UDim2.new(1,0,0,48)
+        b.BackgroundColor3 = Color3.fromRGB(60,50,120)
+        b.Text = (icon or "") .. " " .. text
+        b.TextColor3 = Color3.new(1,1,1)
+        b.TextSize = 15
+        b.Font = Enum.Font.GothamBold
+        b.BorderSizePixel = 0
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0,12)
+        b.MouseButton1Click:Connect(function()
+            pcall(callback)
+            b.BackgroundColor3 = Color3.fromRGB(100,80,180)
+            task.wait(0.1)
+            b.BackgroundColor3 = Color3.fromRGB(60,50,120)
+        end)
+        return b
+    end
+    
+    -- Секции
+    createSection("🏃 ДВИЖЕНИЕ")
+    createToggle("Плавный WalkSpeed", "SpeedBoost", function(s) if s then _G.DoorsSettings.SpeedValue = 17; smoothWalkSpeed() end end)
+    createButton("Луч-Телепорт", "🔫", teleportOnRay)
+    createButton("Телепорт к выходу", "🚪", function()
+        local door = ws:FindFirstChild("Door", true)
+        if door and door:IsA("BasePart") then local hrp = getHRP() if hrp then hrp.CFrame = door.CFrame + Vector3.new(0,3,5) end end
+    end)
+    
+    createSection("👁️ ESP")
+    createToggle("Сущности (Красные)", "EntityESP", function() updateESP() end)
+    createToggle("Предметы (Зелёные)", "ItemESP", function() updateESP() end)
+    createToggle("Двери (Жёлтые)", "DoorESP", function() updateESP() end)
+    createToggle("Игроки", "PlayerESP", function() updateESP() end)
+    
+    createSection("🎨 ВИЗУАЛ")
+    createToggle("FullBright", "FullBright", function(s)
+        lighting.Brightness = s and 3 or 1
+        lighting.GlobalShadows = not s
+        lighting.FogEnd = s and 100000 or 500
+    end)
+    createToggle("NoFog", "NoFog", function(s) lighting.FogEnd = s and 100000 or 500 end)
+    
+    createSection("🤖 АВТО")
+    createToggle("Авто-Взаимодействие", "AutoInteract")
+    createToggle("Анти-Screech", "AntiScreech")
+    createToggle("Анти-AFK", "AntiAFK")
+    
+    createSection("🛡️ ЗАЩИТА")
+    createToggle("God Mode", "GodMode", function(s)
+        if s then task.spawn(function() while _G.DoorsSettings.GodMode do local hum = getHum() if hum then pcall(function() hum.Health = hum.MaxHealth end) end task.wait(0.1) end end) end
+    end)
+    
+    local ShowBtn = Instance.new("TextButton", ScreenGui)
+    ShowBtn.Name = "ShowButton"
+    ShowBtn.Size = UDim2.new(0,55,0,55)
+    ShowBtn.Position = UDim2.new(0,12,0.5,-27)
+    ShowBtn.BackgroundColor3 = Color3.fromRGB(60,50,120)
+    ShowBtn.Text = "🚪"
+    ShowBtn.TextColor3 = Color3.new(1,1,1)
+    ShowBtn.TextSize = 26
+    ShowBtn.Font = Enum.Font.GothamBold
+    ShowBtn.BorderSizePixel = 0
+    Instance.new("UICorner", ShowBtn).CornerRadius = UDim.new(1,0)
+    ShowBtn.MouseButton1Click:Connect(function() Main.Visible = true; ShowBtn.Visible = false end)
+    _G.ShowButton = ShowBtn
+end
+
+-- ============================================================================
+-- ЗАПУСК
+-- ============================================================================
+createMobileUI()
+
+p.Idled:Connect(function()
+    if _G.DoorsSettings.AntiAFK then
+        vu:Button2Down(Vector2.new(0,0), ws.CurrentCamera.CFrame)
+        task.wait(1)
+        vu:Button2Up(Vector2.new(0,0), ws.CurrentCamera.CFrame)
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.3) do
+        if _G.DoorsSettings.AntiScreech then
+            for _, v in ipairs(ws:GetDescendants()) do
+                if v.Name == "Screech" and v:IsA("Model") then
+                    local hrp = getHRP()
+                    local sHRP = v:FindFirstChild("HumanoidRootPart")
+                    if hrp and sHRP then hrp.CFrame = CFrame.lookAt(hrp.Position, sHRP.Position) end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if _G.DoorsSettings.EntityESP or _G.DoorsSettings.ItemESP or _G.DoorsSettings.DoorESP then
+            pcall(updateESP)
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if _G.DoorsSettings.AutoInteract then
+            pcall(autoInteract)
+        end
+    end
+end)
+
+print("🚪 DOORS HUB v2.0 Premium Mobile загружен!")
